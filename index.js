@@ -34,18 +34,20 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
 
     const usersCollections = client.db('restaurent-e-commerce').collection('users')
     const menuCollections = client.db('restaurent-e-commerce').collection('menuCollection')
     const reviewCollections = client.db('restaurent-e-commerce').collection('reviews')
     const cartCollections = client.db('restaurent-e-commerce').collection('carts')
+    const paymentCollections = client.db('restaurent-e-commerce').collection('payments')
 
     // --------jwt API------
     app.post('/jwt', async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' })
+      console.log(token)
       // console.log(token)
       res.send({ token })
     })
@@ -70,6 +72,7 @@ async function run() {
     const varifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
       const query = { email: email }
+      console.log(query, email)
       const user = await usersCollections.findOne(query);
       isAdmin = user?.role === 'admin'
       if (!isAdmin) {
@@ -127,11 +130,13 @@ async function run() {
       res.send(result)
     })
 
-    // --------Admin API---------
+
+
+    // --------Admin API && Admin stats---------
 
 
 
-    app.patch('/users/admin/:id', varifyAdmin, varifyToken, async (req, res) => {
+    app.patch('/users/admin/:id', varifyToken, varifyAdmin, async (req, res) => {
       const id = req.params.id
       const query = { _id: new ObjectId(id) }
       const updatedDoc = {
@@ -142,6 +147,79 @@ async function run() {
       const result = await usersCollections.updateOne(query, updatedDoc)
       res.send(result)
     })
+
+
+    // -------reveneu API--------
+
+    app.get('/admin-stats', varifyToken, varifyAdmin, async (req, res) => {
+      console.log(req)
+      const users = await usersCollections.estimatedDocumentCount();
+      const menuItems = await menuCollections.estimatedDocumentCount();
+      const orders = await paymentCollections.estimatedDocumentCount();
+
+      // const payments= await paymentCollections.find().toArray();
+      // const revenue= payments.reduce((total,payment)=>total+payment.price,0)
+
+      const result = await paymentCollections.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalRevenue: {
+              $sum: '$price'
+            }
+          }
+        }
+      ]).toArray();
+
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+      res.send({
+        users,
+        menuItems,
+        orders,
+        revenue
+      })
+    })
+
+
+
+    app.get('/order-stats',varifyToken,varifyAdmin, async (req, res) => {
+      const result = await paymentCollections.aggregate([
+       {
+        $unwind:'$menuItemIds'
+       },
+       {
+        $lookup:{
+          from: 'menuCollection',
+          localField:'menuItemIds',
+          foreignField: '_id',
+          as:'menuItems'
+        }
+       },
+       {
+        $unwind:'$menuItems'
+       },
+       {
+        $group:{
+          _id:'$menuItems.category',
+          quantity:{$sum: 1},
+          revenue:{$sum:'$menuItems.price'}
+        }
+       },
+       {
+        $project:{
+          _id:0,
+          category:'$_id',
+          quantity:'$quantity',
+          revenue:'$revenue'
+        }
+       }
+        
+       
+      ]).toArray()
+      res.send(result);
+    })
+
 
 
     // -------product/menu API-------
@@ -169,20 +247,20 @@ async function run() {
     })
 
     app.patch('/menu/:id', async (req, res) => {
-      const item=req.body;
-      const id= req.params.id;
-      const filter={_id: new ObjectId(id)}
-      const updatedDoc=
+      const item = req.body;
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) }
+      const updatedDoc =
       {
-        $set:{
-          name:item.name,
-          category:item.category,
-          price:item.price,
-          recipe:item.recipe,
+        $set: {
+          name: item.name,
+          category: item.category,
+          price: item.price,
+          recipe: item.recipe,
           image: item.image
         }
       }
-      const result= await menuCollections.updateOne(filter,updatedDoc)
+      const result = await menuCollections.updateOne(filter, updatedDoc)
       res.send(result)
     })
 
@@ -230,24 +308,53 @@ async function run() {
 
     // ---------payment API----------
 
-    app.post('/create-payment-intent', async(req,res)=>
-    {
-      const {price}=req.body;
-      const amount= parseInt(price*100);
+    app.post('/create-payment-intent', async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
 
       console.log(amount)
 
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: "usd",
-        payment_method_types:['card'],
-        
+        payment_method_types: ['card'],
+
       });
 
       res.send({
         clientSecret: paymentIntent.client_secret
       });
-  
+
+
+    })
+
+
+    app.get('/payments/:email', varifyToken, async (req, res) => {
+      const query = { email: req.params.email }
+      if (req.params.email !== req.decoded.email) {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+      const result = await paymentCollections.find(query).toArray();
+      res.send(result)
+    })
+
+    app.post('/payments', async (req, res) => {
+      const payment = req.body;
+      const paymentHistory = await paymentCollections.insertOne(payment)
+
+
+      // delete cart after payment
+
+      const query = {
+        _id: {
+          $in: payment.cartIds.map(id => new ObjectId(id))
+        }
+      }
+
+      const deletedCart = await cartCollections.deleteMany(query)
+
+      res.send({ paymentHistory, deletedCart })
+
 
     })
 
@@ -258,8 +365,8 @@ async function run() {
 
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
