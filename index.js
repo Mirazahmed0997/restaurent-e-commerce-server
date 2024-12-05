@@ -6,6 +6,15 @@ const jwt = require('jsonwebtoken');
 require('dotenv').config()
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
+// const formData = require('form-data');
+// const Mailgun = require('mailgun.js');
+// const mailgun = new Mailgun(formData);
+
+// const mg = mailgun.client({ 
+//   username: 'api', 
+//   key: process.env.MAIL_GUN_API_KEY
+// });
+
 
 const port = process.env.PORT || 5000;
 
@@ -152,7 +161,7 @@ async function run() {
     // -------reveneu API--------
 
     app.get('/admin-stats', varifyToken, varifyAdmin, async (req, res) => {
-      console.log(req)
+      // console.log(req)
       const users = await usersCollections.estimatedDocumentCount();
       const menuItems = await menuCollections.estimatedDocumentCount();
       const orders = await paymentCollections.estimatedDocumentCount();
@@ -183,39 +192,39 @@ async function run() {
 
 
 
-    app.get('/order-stats',varifyToken,varifyAdmin, async (req, res) => {
+    app.get('/order-stats', varifyToken, varifyAdmin, async (req, res) => {
       const result = await paymentCollections.aggregate([
-       {
-        $unwind:'$menuItemIds'
-       },
-       {
-        $lookup:{
-          from: 'menuCollection',
-          localField:'menuItemIds',
-          foreignField: '_id',
-          as:'menuItems'
+        {
+          $unwind: '$menuItemIds'
+        },
+        {
+          $lookup: {
+            from: 'menuCollection',
+            localField: 'menuItemIds',
+            foreignField: '_id',
+            as: 'menuItems'
+          }
+        },
+        {
+          $unwind: '$menuItems'
+        },
+        {
+          $group: {
+            _id: '$menuItems.category',
+            quantity: { $sum: 1 },
+            revenue: { $sum: '$menuItems.price' }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            category: '$_id',
+            quantity: '$quantity',
+            revenue: '$revenue'
+          }
         }
-       },
-       {
-        $unwind:'$menuItems'
-       },
-       {
-        $group:{
-          _id:'$menuItems.category',
-          quantity:{$sum: 1},
-          revenue:{$sum:'$menuItems.price'}
-        }
-       },
-       {
-        $project:{
-          _id:0,
-          category:'$_id',
-          quantity:'$quantity',
-          revenue:'$revenue'
-        }
-       }
-        
-       
+
+
       ]).toArray()
       res.send(result);
     })
@@ -233,9 +242,9 @@ async function run() {
 
     app.get('/menu/:id', async (req, res) => {
       const id = req.params.id;
-      console.log(id)
+      // console.log(id)
       const query = { _id: new ObjectId(id) }
-      console.log(query)
+      // console.log(query)
       const result = await menuCollections.findOne(query)
       res.send(result)
     })
@@ -284,7 +293,7 @@ async function run() {
 
     //  ------Carts------//
 
-    app.get('/carts', varifyToken, async (req, res) => {
+    app.get('/carts',  async (req, res) => {
       const email = req.query.email
       const query = { email: email }
       const result = await cartCollections.find(query).toArray()
@@ -312,7 +321,7 @@ async function run() {
       const { price } = req.body;
       const amount = parseInt(price * 100);
 
-      console.log(amount)
+      // console.log(amount)
 
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
@@ -353,6 +362,30 @@ async function run() {
 
       const deletedCart = await cartCollections.deleteMany(query)
 
+
+
+      // ------send confirmation email------
+
+
+      // mg.messages
+      // .create(process.env.MAIL_SENDING_DOMAIN, {
+      //   from: "Excited User <mailgun@sandbox-123.mailgun.org>",
+      //   to: ["ahmedmiraz87@gmail.com"],
+      //   subject: "Purchase Confirmation",
+      //   text: "Testing some Mailgun awesomeness!",
+      //   html: `
+        
+      //   <div>
+      //     <h1>Your Order has been confirmed</h1>
+      //     <p>Your transaction ID : ${payment.transactionId}</p>
+      //   </div>
+
+      //   `
+      // })
+      //   .then(msg => console.log(msg)) // logs response data
+      //   .catch(err => console.log(err)); // logs any error
+
+
       res.send({ paymentHistory, deletedCart })
 
 
@@ -366,7 +399,7 @@ async function run() {
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
-    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // onsoonsole.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
